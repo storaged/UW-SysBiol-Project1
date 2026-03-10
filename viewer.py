@@ -13,6 +13,7 @@ by run_experiment.py), lets the user select up to two conditions, and shows:
                            config diff, extinction rates, reproduction stats
 """
 
+import base64
 import json
 import os
 import pickle
@@ -22,6 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as st_components
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
@@ -549,15 +551,33 @@ elif page == "Single run":
 
     if gif_path.exists():
         with g_col2:
-            st.image(str(gif_path))
-            with open(gif_path, "rb") as _gf:
-                st.download_button(
-                    "⬇ Download GIF",
-                    _gf.read(),
-                    file_name=gif_path.name,
-                    mime="image/gif",
-                    key=f"gif_dl_{run['label']}_{chosen_seed}",
-                )
+            gif_b64 = base64.b64encode(gif_path.read_bytes()).decode()
+            gif_uid = f"gif_{run['label']}_{chosen_seed}".replace("/", "_")
+            st_components.html(
+                f"""
+<div style="font-family:sans-serif; text-align:center;">
+  <img id="{gif_uid}" src="data:image/gif;base64,{gif_b64}"
+       style="max-width:100%; border-radius:8px; border:1px solid #ddd;" />
+  <br/>
+  <button
+    onclick="(function(){{ var el=document.getElementById('{gif_uid}'); var s=el.src; el.src=''; el.src=s; }})()"
+    style="margin-top:10px; padding:7px 22px; font-size:14px; cursor:pointer;
+           border-radius:6px; background:#4e8ef7; color:white; border:none;
+           box-shadow:0 2px 4px rgba(0,0,0,.2);">
+    ↩ Restart from generation 0
+  </button>
+</div>
+""",
+                height=520,
+            )
+            gif_bytes = gif_path.read_bytes()
+            st.download_button(
+                "⬇ Download GIF",
+                gif_bytes,
+                file_name=gif_path.name,
+                mime="image/gif",
+                key=f"gif_dl_{run['label']}_{chosen_seed}",
+            )
     elif not generate_btn:
         with g_col2:
             st.info(
