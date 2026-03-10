@@ -44,8 +44,12 @@ def _auto_group(name: str) -> str:
         return "Drift speed sweep"
     if "baseline" in name:
         return "Baseline conditions"
-    if "small_pop" in name or "large_pop" in name:
-        return "Population size"
+    if name.startswith("pop_") or "small_pop" in name or "large_pop" in name:
+        return "Population size sweep"
+    if name.startswith("mut_"):
+        return "Mutation step sweep"
+    if name.startswith("sel_"):
+        return "Selection tolerance sweep"
     return "Other"
 
 
