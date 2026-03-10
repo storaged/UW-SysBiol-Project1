@@ -65,8 +65,8 @@ population cannot keep pace with the moving optimum.
 
 ## Repository structure
 
-| File | Role |
-|------|------|
+| File / directory | Role |
+|------------------|------|
 | `config.py` | All simulation parameters — **start here** |
 | `strategies.py` | Abstract base classes defining the four extension interfaces |
 | `main.py` | `run_simulation()` loop and GIF assembly |
@@ -78,6 +78,9 @@ population cannot keep pace with the moving optimum.
 | `environment.py` | `LinearShiftEnvironment` |
 | `stats.py` | `SimulationStats` — per-generation metrics, numpy array properties |
 | `visualization.py` | GIF frame generation and summary plots |
+| `run_experiment.py` | Parallel experiment runner — see below |
+| `experiments/` | JSON experiment configs (one file = one reproducible condition) |
+| `results/` | Generated output — **not committed**, lives only on your machine |
 
 ---
 
@@ -169,3 +172,53 @@ The **summary plot** (`plot_stats`) shows six panels: the three above plus,
 when reproduction data is available, the number of "evolutionary winners"
 (individuals with ≥ 1 offspring), the median offspring count among
 reproducing individuals, and the maximum offspring count per generation.
+
+---
+
+## Running reproducible experiments
+
+For collecting data across many replicates — which you need for any
+statistical comparison — use the experiment runner:
+
+```bash
+python run_experiment.py experiments/baseline.json --workers 5
+```
+
+This runs 20 independent replicates in parallel (seeds 0–19, defined in the
+JSON) and writes a timestamped directory to `results/`:
+
+```
+results/baseline_20260310_143022/
+  config.json       — exact parameters used (copy of the input JSON)
+  manifest.json     — git commit hash, Python version, OS, timestamp
+  replicate_00.pkl  — full SimulationStats object (load with pickle)
+  replicate_00.csv  — per-generation time series (open in Excel or pandas)
+  ...
+  summary.csv       — mean ± std across all replicates per generation
+```
+
+Each experiment config in `experiments/` is a self-contained JSON file
+that fully specifies one condition — parameters, number of replicates, and
+the exact seeds used. Three baseline configs are provided:
+
+| Config | What it varies |
+|--------|---------------|
+| `baseline.json` | Reference condition (c = 0.01, n = 4) |
+| `baseline_fast_drift.json` | Drift speed doubled (c = 0.02) |
+| `baseline_high_dim.json` | Higher dimensionality (n = 8) |
+
+To define your own experiment, copy one of these files, change the
+parameters and `name` field, and run it. The `results/` directory is
+excluded from git — data files stay on your machine; the config that
+produced them stays in the repository.
+
+Loading results for analysis:
+
+```python
+import pickle, pathlib, pandas as pd
+
+run_dir = pathlib.Path('results/baseline_20260310_143022')
+stats_list = [pickle.load(open(run_dir / f'replicate_{i:02d}.pkl', 'rb'))
+              for i in range(20)]
+summary = pd.read_csv(run_dir / 'summary.csv')
+```
