@@ -16,6 +16,7 @@ by run_experiment.py), lets the user select up to two conditions, and shows:
 import json
 import os
 import pickle
+import re
 from pathlib import Path
 
 import numpy as np
@@ -36,11 +37,60 @@ RESULTS_DIR = Path("results")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-@st.cache_data
-def discover_runs(results_dir: Path) -> list[dict]:
+def _auto_group(name: str) -> str:
+    """Infer an experiment group from the run name when no 'group' key exists
+    in config.json (e.g. for results produced before the field was introduced)."""
+    if name.startswith("drift_c"):
+        return "Drift speed sweep"
+    if "baseline" in name:
+        return "Baseline conditions"
+    if "small_pop" in name or "large_pop" in name:
+        return "Population size"
+    return "Other"
+
+
+def build_run_options(
+    runs: list[dict], dedup: bool = True
+) -> tuple[list[str], list[dict]]:
+    """Sort and optionally deduplicate runs for UI display.
+
+    Deduplication — when the same config was run more than once, keep only the
+    most recent result directory.  ``discover_runs`` returns dirs newest-first
+    so the first occurrence of each name wins.
+
+    Sorting — groups sorted alphabetically; within each group runs are sorted
+    by the trailing numeric value in their name (e.g. drift_c0.006 < 0.014),
+    falling back to alphabetical.
+
+    Returns ``(display_labels, ordered_runs)`` — 1-to-1 aligned lists.
+    Labels are formatted as  ``"[Group]  name"``  for Streamlit widgets.
     """
-    Scan results/ for subdirectories that contain config.json + summary.csv.
-    Returns a list of dicts, one per run, sorted newest-first.
+    if dedup:
+        seen: dict[str, dict] = {}
+        for r in runs:
+            if r["name"] not in seen:
+                seen[r["name"]] = r
+        working = list(seen.values())
+    else:
+        working = list(runs)
+
+    def _sort_key(r: dict):
+        g = r.get("group", "Other")
+        m = re.search(r"(\d+\.?\d*)$", r["name"])
+        num = float(m.group(1)) if m else 0.0
+        return (g, num, r["name"])
+
+    working.sort(key=_sort_key)
+    display_labels = [f"[{r.get('group', 'Other')}]  {r['name']}" for r in working]
+    return display_labels, working
+
+
+def discover_runs(results_dir: Path) -> list[dict]:
+    """Scan results/ for subdirectories containing config.json + summary.csv.
+    Returns a list of dicts, sorted newest-first.
+
+    **Not cached** — the scan is cheap and this ensures new result directories
+    appear immediately without requiring a manual app restart.
     """
     runs = []
     if not results_dir.exists():
@@ -57,10 +107,12 @@ def discover_runs(results_dir: Path) -> list[dict]:
         if mani_path.exists():
             with open(mani_path, encoding="utf-8") as f:
                 manifest = json.load(f)
+        _name = cfg.get("name", d.name)
         runs.append({
             "dir":       d,
-            "label":     d.name,                          # <name>_<timestamp>
-            "name":      cfg.get("name", d.name),
+            "label":     d.name,
+            "name":      _name,
+            "group":     cfg.get("group") or _auto_group(_name),
             "cfg":       cfg,
             "manifest":  manifest,
             "n_reps":    cfg.get("n_replicates", "?"),
@@ -196,6 +248,12 @@ def first_gen_above(df: pd.DataFrame, col: str, threshold: float) -> int | None:
 st.sidebar.title("🧬 GFM Viewer")
 st.sidebar.markdown("---")
 
+if st.sidebar.button(
+    "🔄 Refresh results",
+    help="Re-scan the results/ directory. Use after running a new experiment.",
+):
+    st.rerun()
+
 runs = discover_runs(RESULTS_DIR)
 
 if not runs:
@@ -207,40 +265,123 @@ if not runs:
     )
     st.stop()
 
-run_labels = [r["label"] for r in runs]
-run_by_label = {r["label"]: r for r in runs}
+show_reruns = st.sidebar.checkbox(
+    "Show all re-runs",
+    value=False,
+    help=(
+        "By default only the most recent result directory for each experiment "
+        "name is shown.  Enable to reveal every re-run individually."
+    ),
+)
+display_labels, ordered_runs = build_run_options(runs, dedup=not show_reruns)
+run_by_display = {lbl: r for lbl, r in zip(display_labels, ordered_runs)}
 
-page = st.sidebar.radio("Page", ["Overview", "Single run", "Compare two runs", "Parameter sweep"])
+st.sidebar.markdown("---")
+page = st.sidebar.radio(
+    "Page",
+    ["Overview", "Single run", "Compare two runs", "Parameter sweep"],
+)
 
 # ── Page: Overview ────────────────────────────────────────────────────────────
 
 if page == "Overview":
     st.title("Experiment overview")
+
+    # ── Group summary chips ───────────────────────────────────────────────────
+    groups: dict[str, list[dict]] = {}
+    for r in ordered_runs:
+        groups.setdefault(r.get("group", "Other"), []).append(r)
+
+    grp_names = sorted(groups.keys())
+    grp_cols  = st.columns(len(grp_names))
+    for ci, grp_name in enumerate(grp_names):
+        grp_runs = groups[grp_name]
+        n_reps_t = sum(r["n_reps"] for r in grp_runs if isinstance(r["n_reps"], int))
+        grp_cols[ci].metric(
+            grp_name,
+            f"{len(grp_runs)} condition(s)",
+            f"{n_reps_t} total replicates",
+        )
+
+    st.markdown("---")
+
+    # ── Extinction-rate overview chart ────────────────────────────────────────
+    with st.expander("📊 Extinction rate across all conditions", expanded=True):
+        ext_rows = []
+        for r in ordered_runs:
+            s   = load_summary(r["dir"])
+            ext = int(s["extinct_count"].max()) if "extinct_count" in s.columns else 0
+            n_r = r["n_reps"] if isinstance(r["n_reps"], int) else 1
+            ext_rows.append({
+                "name":  r["name"],
+                "group": r.get("group", "Other"),
+                "rate":  ext / n_r * 100,
+            })
+        ext_df    = pd.DataFrame(ext_rows)
+        uniq_grps = sorted(ext_df["group"].unique())
+        tab10     = plt.get_cmap("tab10")
+        g_color   = {g: tab10(i / 10.0) for i, g in enumerate(uniq_grps)}
+        bar_clrs  = [g_color[row["group"]] for _, row in ext_df.iterrows()]
+
+        fig_ov, ax_ov = plt.subplots(figsize=(max(9, len(ext_df) * 0.62), 4.2))
+        ax_ov.bar(range(len(ext_df)), ext_df["rate"],
+                  color=bar_clrs, edgecolor="white", linewidth=0.5)
+        ax_ov.set_xticks(range(len(ext_df)))
+        ax_ov.set_xticklabels(ext_df["name"], rotation=40, ha="right", fontsize=8)
+        ax_ov.set_ylabel("Extinction rate (%)")
+        ax_ov.set_ylim(0, 118)
+        ax_ov.axhline(50, ls="--", color="#888", lw=1.2)
+        ax_ov.text(
+            len(ext_df) - 0.5, 53, "50 %",
+            fontsize=7.5, color="#666", va="bottom", ha="right",
+        )
+        legend_handles = [
+            mpatches.Patch(color=g_color[g], label=g) for g in uniq_grps
+        ]
+        ax_ov.legend(handles=legend_handles, fontsize=8, loc="upper left")
+        ax_ov.set_title(
+            "Extinction rate by condition  (colour = experiment group)", fontsize=11
+        )
+        plt.tight_layout()
+        st.pyplot(fig_ov)
+        plt.close()
+
+    # ── Full conditions table ─────────────────────────────────────────────────
+    st.subheader("All conditions")
     rows = []
-    for r in runs:
-        summary = load_summary(r["dir"])
-        extinct = int(summary["extinct_count"].max()) if "extinct_count" in summary.columns else "?"
-        last_fit_mean = summary["mean_fitness_mean"].iloc[-1] if "mean_fitness_mean" in summary.columns else float("nan")
+    for r in ordered_runs:
+        s        = load_summary(r["dir"])
+        ext      = int(s["extinct_count"].max()) if "extinct_count" in s.columns else "?"
+        n_r      = r["n_reps"]
+        last_fit = (
+            float(s["mean_fitness_mean"].iloc[-1])
+            if "mean_fitness_mean" in s.columns else float("nan")
+        )
         rows.append({
-            "Run": r["label"],
-            "Name": r["name"],
-            "Replicates": r["n_reps"],
-            "n": r["cfg"].get("n", "?"),
-            "N": r["cfg"].get("N", "?"),
-            "c": r["cfg"].get("c", "?"),
-            "sigma": r["cfg"].get("sigma", "?"),
-            "max_gen": r["cfg"].get("max_generations", "?"),
-            "Extinct": extinct,
-            "Final mean fitness": f"{last_fit_mean:.4f}" if isinstance(last_fit_mean, float) else "?",
-            "Git commit": r["git"],
-            "Timestamp": r["timestamp"],
+            "Group":         r.get("group", "Other"),
+            "Name":          r["name"],
+            "c":             r["cfg"].get("c",     "?"),
+            "n":             r["cfg"].get("n",     "?"),
+            "N":             r["cfg"].get("N",     "?"),
+            "σ":             r["cfg"].get("sigma", "?"),
+            "Replicates":    n_r,
+            "Extinct":       ext,
+            "Extinct %":     (
+                f"{ext/n_r*100:.0f}%"
+                if isinstance(ext, int) and isinstance(n_r, int) else "?"
+            ),
+            "Final fitness": f"{last_fit:.4f}" if not np.isnan(last_fit) else "n/a",
+            "Timestamp":     r["timestamp"][:19] if r["timestamp"] else "",
+            "Git":           r["git"][:7] if r["git"] not in ("?", "") else "?",
         })
     st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
     st.caption(
-        f"Showing {len(runs)} run(s) from `{RESULTS_DIR}/`. "
-        "Add more runs with `python run_experiment.py experiments/<config>.json`."
+        f"Showing {len(ordered_runs)} condition(s) from `{RESULTS_DIR}/`. "
+        "Toggle **Show all re-runs** in the sidebar to include earlier runs of "
+        "the same experiment.  "
+        "Add more: `python run_experiment.py experiments/<config>.json`."
     )
 
 # ── Page: Single run ─────────────────────────────────────────────────────────
@@ -248,8 +389,8 @@ if page == "Overview":
 elif page == "Single run":
     st.title("Single run detail")
 
-    sel = st.sidebar.selectbox("Select run", run_labels)
-    run = run_by_label[sel]
+    sel = st.sidebar.selectbox("Select run", display_labels)
+    run = run_by_display[sel]
 
     col1, col2 = st.columns(2)
     with col1:
@@ -336,15 +477,15 @@ elif page == "Single run":
 elif page == "Compare two runs":
     st.title("Compare two conditions")
 
-    sel_a = st.sidebar.selectbox("Condition A", run_labels, index=0)
+    sel_a = st.sidebar.selectbox("Condition A", display_labels, index=0)
     sel_b = st.sidebar.selectbox(
         "Condition B",
-        run_labels,
-        index=min(1, len(run_labels) - 1),
+        display_labels,
+        index=min(1, len(display_labels) - 1),
     )
 
-    run_a = run_by_label[sel_a]
-    run_b = run_by_label[sel_b]
+    run_a = run_by_display[sel_a]
+    run_b = run_by_display[sel_b]
 
     sum_a = load_summary(run_a["dir"])
     sum_b = load_summary(run_b["dir"])
@@ -479,15 +620,15 @@ elif page == "Parameter sweep":
 
     sel_sweep = st.sidebar.multiselect(
         "Runs to include",
-        run_labels,
-        default=run_labels,
+        display_labels,
+        default=display_labels,
     )
 
     if len(sel_sweep) < 2:
         st.info("Select at least 2 runs from the sidebar to start.")
         st.stop()
 
-    sweep_runs = [run_by_label[lbl] for lbl in sel_sweep]
+    sweep_runs = [run_by_display[lbl] for lbl in sel_sweep]
     swept_params = detect_swept_params(sweep_runs)
     if not swept_params:
         st.warning(
