@@ -206,25 +206,20 @@ def _write_summary(all_stats: list, out_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Entry point
+# Public API  (importable by run_many_experiments.py and notebooks)
 # ---------------------------------------------------------------------------
 
-def main():
-    parser = argparse.ArgumentParser(
-        description='Run parallel FGM replicates from a JSON experiment config.',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='Example:\n  python run_experiment.py experiments/baseline.json\n'
-               '  python run_experiment.py experiments/baseline.json --workers 2',
-    )
-    parser.add_argument('config', help='Path to experiment JSON config file')
-    parser.add_argument(
-        '--workers', type=int, default=None,
-        help='Number of parallel worker processes (default: n_replicates)',
-    )
-    args = parser.parse_args()
+def run_one(config_path: Path | str, n_workers: int | None = None) -> Path:
+    """
+    Run all replicates for a single experiment config and return the output dir.
 
-    # ---- Load and validate config ----
-    config_path = Path(args.config)
+    :param config_path: Path to a JSON experiment config file.
+    :param n_workers:   Number of parallel worker processes.
+                        Defaults to min(n_replicates, CPU count).
+    :return:            Path to the timestamped result directory.
+    :raises SystemExit: If the config is missing or invalid.
+    """
+    config_path = Path(config_path)
     if not config_path.exists():
         sys.exit(f"Error: config file not found: {config_path}")
 
@@ -247,12 +242,12 @@ def main():
     out_dir = Path('results') / f"{cfg['name']}_{timestamp}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    n_workers = min(args.workers or n_replicates, n_replicates)
+    n_workers_eff = min(n_workers or n_replicates, n_replicates)
 
     print(f"\nExperiment : {cfg['name']}")
     if cfg.get('description'):
         print(f"           : {cfg['description']}")
-    print(f"Replicates : {n_replicates}  |  Workers: {n_workers}")
+    print(f"Replicates : {n_replicates}  |  Workers: {n_workers_eff}")
     print(f"Output     : {out_dir}\n")
 
     # ---- Save config + manifest for full reproducibility ----
@@ -273,7 +268,7 @@ def main():
     worker_args = [(cfg, seeds[i], i) for i in range(n_replicates)]
     all_stats = [None] * n_replicates
 
-    with ProcessPoolExecutor(max_workers=n_workers) as pool:
+    with ProcessPoolExecutor(max_workers=n_workers_eff) as pool:
         futures = {pool.submit(_run_replicate, a): a[2] for a in worker_args}
         for fut in as_completed(futures):
             idx, stats = fut.result()
@@ -301,6 +296,31 @@ def main():
     print(f"Files      : {n_replicates}× .pkl + .csv  |  summary.csv  |  "
           f"config.json  |  manifest.json")
     print(f"Extinct    : {extinct}/{n_replicates} replicates\n")
+
+    return out_dir
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Run parallel FGM replicates from a JSON experiment config.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='Example:\n  python run_experiment.py experiments/baseline.json\n'
+               '  python run_experiment.py experiments/baseline.json --workers 2',
+    )
+    parser.add_argument('config', help='Path to experiment JSON config file')
+    parser.add_argument(
+        '--workers', type=int, default=None,
+        help='Number of parallel worker processes (default: n_replicates)',
+    )
+    args = parser.parse_args()
+
+    # ---- Delegate to run_one() ----
+    config_path = Path(args.config)
+    run_one(config_path, n_workers=args.workers)
 
 
 if __name__ == '__main__':
