@@ -8,3 +8,6 @@ scipy
 # For loading and analysing experiment results (run_experiment.py output):
 pandas
 
+# For the interactive results explorer (viewer.py):
+streamlit
+
