@@ -622,14 +622,34 @@ elif page == "Parameter sweep":
         "builds four complementary visualisations."
     )
 
+    # ── Group filter (narrows the multiselect below) ─────────────────
+    all_groups = sorted({r.get("group", "Other") for r in ordered_runs})
+    group_filter = st.sidebar.selectbox(
+        "Filter by group",
+        ["— all groups —"] + all_groups,
+        help="Pick a group to pre-fill only those runs in the selector below.",
+    )
+
+    if group_filter == "— all groups —":
+        candidate_labels = display_labels
+    else:
+        candidate_labels = [
+            lbl for lbl in display_labels
+            if run_by_display[lbl].get("group", "Other") == group_filter
+        ]
+
     sel_sweep = st.sidebar.multiselect(
         "Runs to include",
-        display_labels,
-        default=display_labels,
+        candidate_labels,
+        default=candidate_labels,
+        help="Fine-tune which runs from the selected group to compare.",
     )
 
     if len(sel_sweep) < 2:
-        st.info("Select at least 2 runs from the sidebar to start.")
+        st.info(
+            "Select at least 2 runs from the sidebar to start.  "
+            "Choose a **group** above to quickly load an entire sweep series."
+        )
         st.stop()
 
     sweep_runs = [run_by_display[lbl] for lbl in sel_sweep]
@@ -686,13 +706,128 @@ elif page == "Parameter sweep":
     ]
 
     # ── Tabs ─────────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab0, tab1, tab2, tab3, tab4 = st.tabs([
+        "⚙️ Setup",
         "🌡️ Landscape",
         "📈 Dose-response",
         "🔀 Trajectories",
         "🔬 Adaptive dynamics",
     ])
 
+    # ── Tab 0: Setup ─────────────────────────────────────────────────────────
+    with tab0:
+        st.subheader("Experimental setup")
+        st.markdown(
+            "This tab documents exactly which parameters are **held constant** "
+            "across all selected conditions and which ones **vary** — making the "
+            "experimental design transparent and reproducible."
+        )
+
+        # Build the fixed / varied split
+        all_cfg_keys = sorted(
+            {k for r in sorted_runs for k in r["cfg"]
+             if k not in ("name", "description", "group", "seeds")}
+        )
+        fixed, varied = {}, {}
+        for k in all_cfg_keys:
+            vals_k = [r["cfg"].get(k) for r in sorted_runs]
+            if len({str(v) for v in vals_k}) == 1:
+                fixed[k] = vals_k[0]
+            else:
+                varied[k] = vals_k
+
+        col_fix, col_var = st.columns([1, 1], gap="large")
+
+        with col_fix:
+            st.markdown("### 🔒 Fixed parameters")
+            st.caption("Same value in every condition of this sweep.")
+            fix_rows = [
+                {"Parameter": k,
+                 "Label": PARAM_LABELS.get(k, k),
+                 "Value": str(v)}
+                for k, v in fixed.items()
+            ]
+            st.dataframe(
+                pd.DataFrame(fix_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        with col_var:
+            st.markdown("### 🔀 Varied parameters")
+            st.caption("These differ across conditions — the experimental axes.")
+            var_rows = []
+            for k, vals_k in varied.items():
+                var_rows.append({
+                    "Parameter": k,
+                    "Label": PARAM_LABELS.get(k, k),
+                    "Min": min(v for v in vals_k if v is not None),
+                    "Max": max(v for v in vals_k if v is not None),
+                    "# levels": len(set(vals_k)),
+                    "Values": ", ".join(str(v) for v in vals_k),
+                })
+            st.dataframe(
+                pd.DataFrame(var_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.markdown("---")
+
+        # Per-condition parameter cards
+        st.markdown("### 📋 Per-condition parameter cards")
+        st.caption(
+            "Each card shows the swept parameter value in the header and lists "
+            "every fixed parameter below it for quick reference."
+        )
+        card_cols = st.columns(min(n_runs, 5))
+        for ci, (run, val, col) in enumerate(zip(sorted_runs, param_vals, colors)):
+            hex_c     = mcolors.to_hex(col)
+            r_v, g_v, b_v = col[:3]
+            text_c    = "#111" if (0.299*r_v + 0.587*g_v + 0.114*b_v) > 0.55 else "#fff"
+            ext_count = 0
+            if "extinct_count" in summaries[run["label"]].columns:
+                ext_count = int(summaries[run["label"]]["extinct_count"].max())
+            n_reps = run["cfg"].get("n_replicates", "?")
+            ext_pct = f"{ext_count/n_reps*100:.0f}%" if isinstance(n_reps, int) else "?"
+
+            fixed_lines = "".join(
+                f"<tr><td style='padding:1px 6px;color:#555;font-size:10px'>{k}</td>"
+                f"<td style='padding:1px 4px;font-size:10px'>{run['cfg'].get(k,'—')}</td></tr>"
+                for k in sorted(fixed)
+            )
+            card_cols[ci % 5].markdown(
+                f"<div style='border:1px solid #ddd;border-radius:8px;"
+                f"overflow:hidden;margin-bottom:8px'>"
+                f"<div style='background:{hex_c};padding:8px 10px;color:{text_c}'>"
+                f"<div style='font-size:13px;font-weight:700'>{param_choice} = {val}</div>"
+                f"<div style='font-size:10px;opacity:.85'>{run['name']}</div>"
+                f"<div style='font-size:10px;margin-top:2px'>extinct {ext_count}/{n_reps} ({ext_pct})</div>"
+                f"</div>"
+                f"<div style='padding:6px 4px'>"
+                f"<table style='width:100%;border-collapse:collapse'>{fixed_lines}</table>"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("---")
+
+        # Provenance table
+        st.markdown("### 🔬 Provenance")
+        st.caption("Git commit and timestamp for every result directory in this sweep.")
+        prov_rows = [
+            {
+                "Condition":   r["name"],
+                f"{param_choice}": r["cfg"].get(param_choice),
+                "Result dir":  r["dir"].name,
+                "Timestamp":   r["timestamp"][:19] if r["timestamp"] else "—",
+                "Git commit":  r["git"][:7] if r["git"] not in ("?", "") else "?",
+                "Python":      r["manifest"].get("python_version", "—"),
+                "OS":          r["manifest"].get("platform", "—"),
+            }
+            for r in sorted_runs
+        ]
+        st.dataframe(pd.DataFrame(prov_rows), use_container_width=True, hide_index=True)
     # ── Tab 1: Landscape heatmap ──────────────────────────────────────────────
     with tab1:
         st.subheader("Metric landscape over time")
