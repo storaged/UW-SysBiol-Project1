@@ -5,3 +5,6 @@ imageio
 # For statistical tests in the assignment (Step 4 of TASK.md):
 scipy
 
+# For loading and analysing experiment results (run_experiment.py output):
+pandas
+

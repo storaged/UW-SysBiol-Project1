@@ -1,0 +1,17 @@
+{
+  "name": "baseline_high_dim",
+  "description": "Higher dimensionality (n=8 vs baseline n=4). Tests Fisher's dimensionality prediction: adaptation should be slower and extinction more likely at the same drift speed. Reduced xi to compensate for the curse of dimensionality.",
+  "n": 8,
+  "N": 100,
+  "sigma": 0.2,
+  "xi": 0.03,
+  "mu": 0.1,
+  "mu_c": 0.5,
+  "c": 0.01,
+  "delta": 0.01,
+  "threshold": 0.01,
+  "init_scale": 0.07,
+  "max_generations": 200,
+  "n_replicates": 20,
+  "seeds": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+}
