@@ -476,6 +476,96 @@ elif page == "Single run":
         n_reps  = run["cfg"].get("n_replicates", "?")
         st.metric("Extinct replicates", f"{max_ext} / {n_reps}")
 
+    # ── On-demand GIF generation ──────────────────────────────────────────────
+    st.markdown("---")
+    st.subheader("🎬 Phenotype-space GIF")
+
+    cfg          = run["cfg"]
+    n_replicates = cfg.get("n_replicates", 1)
+
+    g_col1, g_col2 = st.columns([1, 3])
+    with g_col1:
+        chosen_seed = int(st.number_input(
+            "Random seed",
+            min_value=0,
+            max_value=max(n_replicates - 1, 0),
+            value=0,
+            step=1,
+            key=f"gif_seed_{run['label']}",
+            help="Each integer seed gives a different evolutionary trajectory.",
+        ))
+        gif_duration = st.slider(
+            "Frame duration (s)",
+            min_value=0.05, max_value=0.50, value=0.15, step=0.05,
+            key=f"gif_dur_{run['label']}",
+        )
+        generate_btn = st.button(
+            "▶ Generate GIF",
+            key=f"gif_btn_{run['label']}",
+            help=(
+                "Reruns the simulation from scratch with the chosen seed "
+                "and assembles a phenotype-space animation."
+            ),
+        )
+
+    gif_path = run["dir"] / f"phenotype_seed{chosen_seed}.gif"
+
+    if generate_btn:
+        with st.spinner("Running simulation and rendering frames…"):
+            from population   import Population
+            from environment  import LinearShiftEnvironment
+            from selection    import TwoStageSelection
+            from reproduction import AsexualReproduction
+            from mutation     import IsotropicMutation
+            from main         import run_simulation, create_gif_from_frames
+
+            np.random.seed(chosen_seed)
+            n      = cfg["n"]
+            alpha0 = np.zeros(n)
+            c_raw  = cfg.get("c", 0.01)
+            c_arr  = (
+                np.full(n, c_raw) if np.isscalar(c_raw)
+                else np.array(c_raw, dtype=float)
+            )
+
+            pop = Population(cfg["N"], n, cfg["init_scale"], alpha_init=alpha0)
+            env = LinearShiftEnvironment(
+                alpha0.copy(), c_arr.copy(), cfg.get("delta", 0.01)
+            )
+            sel = TwoStageSelection(cfg["sigma"], cfg["threshold"], cfg["N"])
+            rep = AsexualReproduction()
+            mut = IsotropicMutation(cfg["mu"], cfg["mu_c"], cfg["xi"])
+
+            frames_tmp = str(run["dir"] / f"gif_frames_seed{chosen_seed}")
+            run_simulation(
+                pop, env, sel, rep, mut,
+                max_generations=cfg["max_generations"],
+                frames_dir=frames_tmp,
+                verbose=False,
+                target_size=cfg["N"],
+                sigma=cfg["sigma"],
+            )
+            create_gif_from_frames(frames_tmp, str(gif_path), duration=gif_duration)
+
+    if gif_path.exists():
+        with g_col2:
+            st.image(str(gif_path))
+            with open(gif_path, "rb") as _gf:
+                st.download_button(
+                    "⬇ Download GIF",
+                    _gf.read(),
+                    file_name=gif_path.name,
+                    mime="image/gif",
+                    key=f"gif_dl_{run['label']}_{chosen_seed}",
+                )
+    elif not generate_btn:
+        with g_col2:
+            st.info(
+                "Click **▶ Generate GIF** to run a fresh simulation with the "
+                "chosen seed and produce a phenotype-space animation.  "
+                "This takes roughly as long as a single replicate."
+            )
+
 # ── Page: Compare two runs ────────────────────────────────────────────────────
 
 elif page == "Compare two runs":
