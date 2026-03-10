@@ -13,6 +13,7 @@ inspect, and extend without modifying the core engine.
 
 | Guide | Contents |
 |---|---|
+| **[Mathematical background](docs/mathematical_background.md)** | Full formal specification — state spaces, fitness function, all four operators with probability distributions, statistics, Markov chain formulation, references |
 | **[Running experiments](docs/running-experiments.md)** | Config file format, `run_experiment.py`, `run_many_experiments.py`, batch options, loading results in Python |
 | **[Interactive viewer](docs/viewer.md)** | All four Streamlit pages — Overview, Single run, Compare, Parameter sweep, on-demand GIF generation |
 
