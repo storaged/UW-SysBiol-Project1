@@ -222,3 +222,54 @@ stats_list = [pickle.load(open(run_dir / f'replicate_{i:02d}.pkl', 'rb'))
               for i in range(20)]
 summary = pd.read_csv(run_dir / 'summary.csv')
 ```
+
+---
+
+## Exploring results interactively
+
+Once you have at least one completed experiment in `results/`, launch the
+interactive viewer:
+
+```bash
+streamlit run viewer.py
+```
+
+Your browser opens automatically. The app has three pages, selectable from
+the left sidebar:
+
+### Overview page
+
+A table of every run found in `results/`, showing the key parameters
+(n, N, c, σ), number of replicates, how many went extinct, the final
+mean fitness, and the exact git commit that produced the data — so every
+row is fully traceable.
+
+### Single run page
+
+Pick any run to explore in depth:
+- **Config** panel — the full JSON config used to produce the run
+- **Manifest** panel — git commit hash, Python version, OS, and timestamp
+- **Metric plots** — choose any combination of tracked metrics (mean
+  fitness, distance from optimum, phenotypic variance, population size,
+  reproduction statistics) and see mean ± std bands across all replicates
+- **Individual replicate curves** — optional overlay of each replicate's
+  raw time series; replicates that went extinct before the final generation
+  are shown as dashed lines
+
+### Compare two runs page
+
+Select two conditions (e.g. `baseline` and `baseline_fast_drift`) from
+the sidebar dropdowns. The app then shows:
+- **Parameter diff table** — only the parameters that differ between the
+  two configs, so the experimental contrast is immediately visible
+- **Overlaid time-series** — all chosen metrics plotted together, with
+  colour-coded mean ± std bands for each condition
+- **Extinction rate chart** — bar chart of the fraction of replicates that
+  went extinct, plus a Fisher's exact test p-value if each condition has
+  at least 5 replicates
+- **Final-generation snapshot** — a side-by-side table of mean ± std for
+  every metric at the last recorded generation
+
+> The viewer reads only the `summary.csv` and `config.json` / `manifest.json`
+> files for the main views. Individual replicate data (`.pkl` / `.csv`) is
+> loaded on demand when you tick "Show individual replicate curves".
